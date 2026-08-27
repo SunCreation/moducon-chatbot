@@ -1,6 +1,8 @@
 // 모두콘 안내 챗봇 — ollama 스트리밍 클라이언트
 // 브라우저가 직접 localhost:11434 호출 (OLLAMA_ORIGINS 설정 필요)
 
+import { buildJudgePrompt, parseJudge, type JudgeResult } from "./judge";
+
 export interface ChatMsg {
   role: "system" | "user" | "assistant";
   content: string;
@@ -50,6 +52,33 @@ export async function chatStream(
     }
   }
   return full;
+}
+
+/** LLM-as-a-Judge(로컬): 답변에 쓴 qwen이 같은 모델로 자기 답을 평가.
+ *  format:"json" + temperature 0으로 JSON 출력을 강제한다 (API 키 불필요). */
+export async function judgeWithOllama(
+  question: string,
+  sources: string,
+  answer: string,
+  model = "qwen3.5:2b",
+): Promise<JudgeResult> {
+  const res = await fetch("http://localhost:11434/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: buildJudgePrompt(question, sources, answer) }],
+      stream: false,
+      think: false,
+      format: "json",
+      options: { temperature: 0 },
+    }),
+  });
+  if (!res.ok) {
+    throw Object.assign(new Error(`ollama judge ${res.status}`), { status: res.status });
+  }
+  const j = await res.json();
+  return parseJudge(j.message?.content ?? "");
 }
 
 /** ollama 서버 상태 확인 (페이지 로드 시) */

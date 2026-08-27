@@ -1,81 +1,138 @@
 # PRD — 모두콘 안내 챗봇 (ModuCon Guide Chatbot)
 
+버전 v1.2 · 2026-08-27 · LMS day-31 종합 실습 산출물
+
 ## 1. 개요
-모두의연구소의 연간 개발 컨퍼런스 **모두콘**을 소개하는 정적 웹 페이지 + RAG 챗봇. 사용자의 브라우저가 로컬 ollama(qwen3.5:2b)와 직접 통신하며, 임베딩도 브라우저에서 실행한다. 서버리스·API 키 불필요.
+모두의연구소의 연간 개발 컨퍼런스 **모두콘**을 소개하는 정적 웹 페이지 + RAG 챗봇.
+사용자의 브라우저가 로컬 ollama(qwen3.5:2b)와 직접 통신하며 임베딩도 브라우저에서 실행한다. 서버리스·API 키 불필요(Gemini API 키는 선택 옵션).
+모든 답변은 **LLM-as-a-Judge**로 자동 판정(채점)되어, 검색→생성→평가 파이프라인 전체를 페이지에서 눈으로 볼 수 있다 — 4일 교육(지시·맥락·도구·평가)의 마지막 날 '평가' 학습이 목적.
 
 ## 2. 목표 / 비목표
 **목표**
-- 모두콘 소개 페이지: 무엇인지·일정·참가 방법·프로그램 구성 안내
-- RAG 챗봇: 모두콘 공개 자료 기반으로 답변, 출처 표시, 스트리밍 출력
-- LMS day-31 튜토리얼 산출물: 4일 교육(지시·맥락·도구·평가)의 종합 실습
+- 모두콘 소개 페이지: 무엇인지·연혁(2018~2025)·일정·참가 방법·프로그램 구성 안내
+- RAG 챗봇: 공개 자료 기반 답변, 검색 단계 공개(유사도·근거 조각), 출처 표시, 스트리밍 출력
+- LLM-as-a-Judge: 답변마다 근거 준수·환각·출처 표시를 자동 채점해 배지로 표시
+- 사용자 피드백(👍👎): 사람 평가 신호 수집
+- 시간 인식: 질문 시점 KST 시각을 컨텍스트에 주입해 '올해', '작년', '지금' 해석
 
-**비목표 (v1)**
+**비목표**
 - 로그인·사용자 관리, 발표 논문 전문·시간표 DB 전체 검색, 다국어, 모바일 최적화(동작은 해야 함)
+- 판정 결과·피드백의 서버 수집(세션 내 콘솔 기록만)
 
 ## 3. 아키텍처
 ```
-GitHub Pages (정적)
- └─ React + Vite SPA
-     ├─ 페이지: 모두콘 소개 (히어로·프로그램·FAQ)
-     ├─ 챗봇 패널
-     │   ├─ 임베딩: transformers.js (bge-small-en-v1.5, WebGPU/WASM)
-     │   ├─ 벡터스토어: moducon-docs.json (청크+벡터, 코사인 유사도 top-k)
-     │   └─ 답변: fetch http://localhost:11434/api/chat (stream:true)
-     └─ 설정: OLLAMA_ORIGINS 가이드 배너
+GitHub Pages (정적) — SunCreation/moducon-chatbot, Actions로 main push마다 배포
+ └─ React + Vite SPA (백엔드 없음)
+     ├─ 소개 페이지: 히어로 · 연혁 · 프로그램 · FAQ
+     └─ 챗봇 파이프라인 (각 단계를 UI에 공개)
+         ① 질의 임베딩  — transformers.js 토크나이저 + ORT 직접 세션
+                          (embeddinggemma-300m, 768차원, model_no_gather_q4 변형 —
+                           브라우저 WASM ORT가 q4 Gather 노드를 지원하지 않아 회피)
+         ② 근거 검색    — moducon-docs.json 37청크와 코사인 유사도 top-3
+                          최고 유사도 < 0.55면 '근거 약함' 경고 배지
+         ③ 답변 생성    — 로컬: ollama qwen3.5:2b 스트리밍 (fetch + ReadableStream)
+                          옵션: Gemini API streamGenerateContent SSE (사용자 키, 브라우저 직접)
+                          · 시스템 프롬프트에 질문 시점 KST 시각 주입
+                          · 근거 [ID] 인용 강제, 자료에 없으면 '없다'고 답하도록 지시
+         ④ 판정         — LLM-as-a-Judge: 답변에 쓴 엔진과 같은 모델이 JSON으로 채점
+         ⑤ 피드백       — 👍👎 토글 (세션 내)
 ```
-- 백엔드 없음. 빌드 산출물(dist/)을 gh-pages로 배포.
-- 청킹·임베딩은 **사전 오프라인 단계**(노트북에서 python)로 수행, 결과 JSON을 정적 파일로 포함. 런타임에 임베딩되는 것은 **사용자 질문**뿐(질의 임베딩 = bge-small로 브라우저 실행).
+- 임베딩 모델(~200MB)은 첫 방문 1회 다운로드 후 브라우저 캐시(진행률 표시).
+- 청킹·임베딩은 사전 오프라인 단계(python: fastembed로 청크 정의 → gemma 768d 재임베딩)로 수행하고 결과 JSON을 정적 파일로 배포. 런타임에 임베딩되는 것은 사용자 질문뿐이며, 오프라인·브라우저가 같은 벡터 공간(gemma)을 쓴다.
 
 ## 4. 기능 명세
 ### 4.1 소개 페이지
-- 히어로: 모두콘 슬로건·최근 대회 연도
-- 모두콘이란 / 참가 방법 / 프로그램(발표·부스·네트워킹) / FAQ 아코디언
-- 자료 출처 표기 (수집 페이지 목록)
+- 히어로: 모두콘 슬로건·최근 개최 연도, 챗봇 CTA
+- 모두콘이란 / 연혁(2018~2025) / 참가 방법 / 프로그램 / FAQ
 
-### 4.2 챗봇
-- 채팅 UI: 사용자/봇 버블, 마크다운 렌더, 출처 칩(조각 id 클릭 → 원문 하이라이트)
-- 스트리밍: ollama `/api/chat` `stream:true` → ReadableStream, 토큰 단위 append
-- RAG 파이프라인 (브라우저):
-  1) 질문 임베딩(transformers.js)
-  2) moducon-docs.json 벡터와 코사인 유사도 → top-3
-  3) 시스템 지시 + "주어진 자료 근거로만 답하고 없으면 모른다고" + 조각 3개
-  4) 스트리밍 답변 + 출처 표시
-- 상태 표시: 임베딩 모델 로딩(첫 방문 ~30MB) / ollama 미실행 감지 → 설정 안내 배너
-- 실패 처리: ollama 403(CORS)·연결 거부 → "OLLAMA_ORIGINS 설정법" 안내 카드
+### 4.2 챗봇 파이프라인
+- 단계 표시: ① 임베딩 → ② 검색(근거 박스: ID·섹션·유사도·본문 미리보기) → ③ 스트리밍 답변 → ④ 판정
+- 출처 칩 클릭 → 근거 조각 전문 모달(원문 링크 포함)
+- 약근거 경고: top-1 유사도 < 0.55면 ⚠ 배지 + 프롬프트에 보수 지시 주입
+- 시간 컨텍스트: buildPrompt() 호출 시점의 KST 시각을 시스템 프롬프트에 명시, 상대 시간 표현 해석 기준으로 사용
+- 엔진 선택: 로컬(ollama) 기본 / Gemini(사용자 API 키, localStorage 저장 — 서버 전송 없음)
+- 에러 처리: ollama 미실행·CORS 실패 → 채팅창 안내 + OS별 설정 가이드 배너(macOS launchctl / Windows setx·시스템 환경변수 / Linux systemd), Chrome/Edge 권장 안내(로컬 네트워크 권한 허용)
 
 ### 4.3 데이터 (사전 구축)
-- 소스: 모두의연구소 홈·모두콘 소개/후기 공개 페이지 (수집)
-- 청크: 제목+문단 단위, 200~600자, 메타(출처 URL·섹션)
-- 임베딩: BAAI/bge-small-en-v1.5 — 오프라인(fastembed)과 브라우저(transformers.js)가 같은 모델이라 벡터 공간 호환
-- 산출: `public/moducon-docs.json` `{id, text, url, section, vector[384]}`
+- 벡터스토어 `public/moducon-docs.json` — 37청크, 각 `{id, text, url, section, vector[768]}`
+- 구성: 2025 공식 페이지 28청크(소개·일정·참가·프로그램·FAQ·다시보기) + 역대 모두콘 9청크(2018~2024 연혁·개최지·규모·키노트·모두의연구소 소개·후기)
+- 출처 원칙: 수치는 1차 출처(언론 보도·참가자 후기)로 교차 검증된 것만 수록. 검증 안 된 수치는 배제(예: '2018년 300명'은 미확인 → '첫 회차'로만 기술). 청크별 URL은 URL_MAP으로 검증된 원문에 연결
+- 임베딩: embeddinggemma-300m(768d). 브라우저(transformers.js + no_gather_q4 ONNX)와 오프라인 재임베딩이 동일 모델·벡터 공간 사용. 배포 전 예상 질문 top-1/top-3 검색 스팟체크를 게이트로 통과
+
+### 4.4 LLM-as-a-Judge 답변 판정
+**개념** — 사람이 다 보지 못하는 RAG 답변의 품질을 LLM이 대신 채점한다. 이 데모에서는 '객관적 채점자'가 아니라 **답변을 만든 엔진과 같은 모델이 자기 답을 평가**해, 자기평가(self-evaluation)의 강점과 한계를 직접 체험하게 한다.
+
+**판정 시점·엔진 규칙**
+- 스트리밍 완료 후 자동 1회, 별도 버튼 없음
+- 로컬 엔진 → qwen3.5:2b 자기평가 (API 키 불필요)
+- Gemini 엔진 → gemini-3.5-flash 평가 (generateContent, 비스트리밍)
+- 판정 기준·프롬프트·출력 파싱은 `judge.ts` 공통 모듈로 엔진 간 공유
+
+**평가 기준 (출력 스키마)**
+| 필드 | 판정 질문 | 출력 |
+|---|---|---|
+| `grounded` | 답변 내용이 근거자료에서 나왔는가 | bool |
+| `noHalluc` | 근거에 없는 사실을 지어내지 않았는가 | bool |
+| `cited` | 답변 안에 근거 조각 [ID] 표시가 있는가 | bool |
+| `refusal` | 자료에 답이 없어 '없다'고 답한 경우 | bool |
+| `score` | 종합 점수 | 0-100 정수 |
+| `comment` | 평어 | 한두 문장 한국어 |
+
+**출력 신뢰성 확보**
+- ollama: `format:"json"` + `temperature:0`으로 JSON 문법 강제 (실측: qwen3.5:2b가 유효 판정 JSON 출력 확인)
+- gemini: 프롬프트로 JSON만 요구 + 응답에서 `{...}` 정규식 추출로 방어
+- 공통 파싱 방어: 모델이 5점 만점으로 오해하면 100점 척도 환산, 불완전 필드는 기본값으로 보정
+
+**UI 표시**
+- 답변 아래 판정 배지: `평가 {score}점 · 근거 준수/이탈 · 환각 없음/의심 · 출처 표시/누락 (+ 정당한 거부)` + 평어 + 판정 엔진 라벨(`qwen3.5:2b 자기평가` / `gemini-3.5-flash`)
+- 점수 70점 기준 녹색(ok)/적색(bad) 배경
+- 판정 진행 중: `④ 판정 중… (LLM-as-a-Judge)`
+- 판정 실패: 주황 배지로 실패만 표시 — 답변·나머지 UI는 그대로 유지(평가 실패가 답변을 해치지 않는다)
+
+**교육 포인트**
+- 로컬 2B 자기평가는 무료·오프라인이지만 관대하거나 거칠 수 있고, 강한 모델 판정(gemini)과 비교해보며 판정자 선택(judge selection)의 영향을 체험
+- refusal 케이스(자료에 없는 질문)에서 '없다고 답하기'가 판정 기준과 연결되는 것을 관찰
+
+### 4.5 사용자 피드백
+- 모든 답변에 👍👎 토글 버튼(판정과 별개의 사람 평가 신호), 선택은 콘솔 로그(데모 — 서버 수집 없음)
 
 ## 5. 기술 스택
-- React 18 + Vite + TypeScript
-- @huggingface/transformers (transformers.js v3, WebGPU 폴백 WASM)
-- 스타일: 순수 CSS (의존 최소)
-- 배포: GitHub Actions → gh-pages
+- React 18 + Vite + TypeScript, 스타일 순수 CSS
+- @huggingface/transformers(transformers.js v3) — 토크나이저
+- onnxruntime-web 1.26.0-dev(transformers.js 4.2.0과 검증된 조합) — 임베딩 ORT 세션 직접 구성(no_gather_q4)
+- 배포: GitHub Actions → GitHub Pages(main push)
 
 ## 6. 사용자 설정 (문서 + UI 안내)
-1. ollama 설치·qwen3.5:2b pull
-2. `launchctl setenv OLLAMA_ORIGINS "https://*.github.io"` 후 Ollama 재시작
-3. 페이지 접속 → 첫 회 임베딩 모델 다운로드
+1. ollama 설치 · `ollama pull qwen3.5:2b`
+2. CORS: `OLLAMA_ORIGINS="https://*.github.io"` 설정 후 Ollama 재시작
+   - macOS: `launchctl setenv OLLAMA_ORIGINS "https://*.github.io"` 후 앱 재시작
+   - Windows: `setx OLLAMA_ORIGINS "https://*.github.io"` 후 Ollama 재시작
+   - Linux: systemd 서비스 Environment에 추가 후 재시작
+3. 브라우저: Chrome/Edge 권장(로컬 네트워크 권한 허용) — Safari는 로컬 모델 미지원
+4. 페이지 접속 → 첫 회 임베딩 모델 다운로드(약 200MB, 1회)
+5. (선택) Gemini 엔진: API 키 입력 — 브라우저 localStorage에만 저장
 
 ## 7. 성능·제한
-- 첫 질의: 임베딩 모델 로드 5~15초(이후 브라우저 캐시)
+- 첫 질의: 임베딩 모델 로드 5~15초(이후 캐시), 임베딩 모델 다운로드 ~200MB(첫 방문 1회)
 - 스트리밍 latency: 로컬 qwen3.5:2b 토큰당 ~50ms
-- 청크 수 수십~수백 수준 → 전체 로드 코사인 계산으로 충분
+- 판정 latency: 로컬 자기평가 수 초 내외(비스트리밍 1회 호출), gemini 판정은 API 응답 시간
+- 로컬 판정은 2B 모델이라 판정 자체가 거칠 수 있음(교육적 의도) — 판정 실패 시 배지 표시 후 생략
+- 청크 37개 → 전체 로드 코사인 계산으로 충분
+- Safari에서 로컬 모델(ollama/임베딩 WASM) 동작 불안정 → Chrome/Edge 안내
 
 ## 8. 수용 기준 (Acceptance)
-- [ ] 페이지에 모두콘 소개가 출처와 함께 표시된다
-- [ ] "모두콘이 뭐야?" 질문에 근거 조각을 인용해 스트리밍 답변
-- [ ] 자료에 없는 질문("내일 날씨")에 "자료에 없다"고 답한다
+- [ ] 페이지에 모두콘 소개·연혁이 출처와 함께 표시된다
+- [ ] "모두콘이 뭐야?" 질문에 근거 조각을 인용([ID])해 스트리밍 답변
+- [ ] 자료에 없는 질문("내일 날씨")에 "자료에 없다"고 답하고 판정에서 refusal=true로 확인된다
+- [ ] **모든 답변 아래 판정 배지(점수·근거·환각·출처·평어)가 표시된다**
+- [ ] **로컬 엔진(API 키 없음)에서도 판정이 동작한다 — qwen 자기평가**
+- [ ] **판정 실패 시 답변·UI가 그대로 유지되고 실패 배지만 표시된다**
+- [ ] '작년 모두콘' 같은 상대 시간 질문에 질문 시점 기준으로 답한다
 - [ ] 출처 칩 클릭 → 원문 표시
 - [ ] ollama 꺼진 상태 → 안내 배너 표시, 재시도 동작
-- [ ] github.io에서 정상 동작 (CORS 설정 후)
+- [ ] github.io에서 정상 동작 (CORS 설정 후, Chrome/Edge)
 
-## 9. 일정 (오늘)
-1. 자료 수집·청킹·JSON 구축 (python)
-2. Vite 스캐폴드 + 소개 페이지
-3. 챗봇: 임베딩 로더 + 검색 + 스트리밍 UI
-4. 로컬 통합 실측 → CORS 실측 → github pages 배포
-5. README (설정 가이드)
+## 9. 변경 이력
+- v1.0 — 첫 배포: 소개 페이지 + RAG 챗봇(bge 384d → gemma 768d 교체, no_gather_q4 워크어라운드)
+- v1.1 — Gemini API 엔진 옵션, 벡터스토어 28→37청크(역대 모두콘·모두의연구소), 질문 시점 시간 컨텍스트, OS별 CORS 가이드·Chrome 권장 배너
+- v1.2 — LLM-as-a-Judge 전 엔진 지원: 로컬 qwen 자기평가 추가(format:json), 판정 공통 모듈(judge.ts) 분리, 판정 엔진 라벨·실패 배지·'정당한 거부' 표시, PRD 전면 갱신

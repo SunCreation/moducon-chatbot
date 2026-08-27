@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { retrieve, buildPrompt, loadCorpus, onEmbedProgress, type Retrieved } from "./rag";
-import { chatStream, pingOllama, type ChatMsg } from "./ollama";
-import { geminiStream, judgeTurn, type JudgeResult } from "./gemini";
+import { chatStream, pingOllama, judgeWithOllama, type ChatMsg } from "./ollama";
+import { geminiStream, judgeTurn } from "./gemini";
+import type { JudgeResult } from "./judge";
 import "./App.css";
 
 interface Turn {
@@ -10,6 +11,8 @@ interface Turn {
   sources?: Retrieved[];
   question?: string;
   judge?: JudgeResult;
+  judgeBy?: "qwen3.5:2b" | "gemini-3.5-flash";
+  judgeError?: boolean;
   feedback?: "up" | "down";
 }
 
@@ -40,6 +43,7 @@ export default function App() {
   const [showSource, setShowSource] = useState<Retrieved[] | null>(null);
   const [lastHits, setLastHits] = useState<Retrieved[] | null>(null);
   const [dlPct, setDlPct] = useState<number | null>(null);
+  const [judgeBusy, setJudgeBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -106,18 +110,32 @@ export default function App() {
         await chatStream(messages, onPiece, "qwen3.5:2b", abortRef.current.signal);
       }
       setPhase("idle");
-      // LLM-as-a-Judge (gemini 키가 있을 때 자동 평가)
-      if (apiKey) {
-        try {
-          const src = hits.map((h) => `[${h.chunk.id}] ${h.chunk.text}`).join("\n");
-          const verdict = await judgeTurn(lastQ, src, acc, apiKey);
-          setTurns((t) => {
-            const copy = [...t];
-            const li = copy.length - 1;
-            copy[li] = { ...copy[li], judge: verdict };
-            return copy;
-          });
-        } catch { /* 평가 실패는 답변을 해치지 않음 */ }
+      // ④ LLM-as-a-Judge — 답변에 쓴 엔진과 같은 모델이 판정한다
+      //    로컬 → qwen 자기평가(API 키 불필요), gemini → gemini-3.5-flash
+      setJudgeBusy(true);
+      try {
+        const src = hits.map((h) => `[${h.chunk.id}] ${h.chunk.text}`).join("\n");
+        const by = engine === "gemini" && apiKey ? "gemini-3.5-flash" as const : "qwen3.5:2b" as const;
+        const verdict =
+          engine === "gemini" && apiKey
+            ? await judgeTurn(lastQ, src, acc, apiKey)
+            : await judgeWithOllama(lastQ, src, acc);
+        setTurns((t) => {
+          const copy = [...t];
+          const li = copy.length - 1;
+          copy[li] = { ...copy[li], judge: verdict, judgeBy: by };
+          return copy;
+        });
+      } catch {
+        // 판정 실패가 답변을 해치지 않게 배지만 단다
+        setTurns((t) => {
+          const copy = [...t];
+          const li = copy.length - 1;
+          copy[li] = { ...copy[li], judgeError: true };
+          return copy;
+        });
+      } finally {
+        setJudgeBusy(false);
       }
     } catch (e: unknown) {
       console.error("챗봇 파이프라인 오류:", e);
@@ -242,12 +260,15 @@ export default function App() {
               {t.role === "assistant" && t.question && (
                 <div className="meta-row">
                   {t.judge ? (
-                    <span className={`judge judge-${(t.judge.score ?? 0) >= 70 ? "ok" : "bad"}`}>
-                      평가 {t.judge.score}점 · {t.judge.grounded ? "근거 준수" : "근거 이탈"} · {t.judge.noHalluc ? "환각 없음" : "환각 의심"}{t.judge.cited ? " · 출처 표시" : " · 출처 누락"}
+                    <span className={`judge ${(t.judge.score ?? 0) >= 70 ? "ok" : "bad"}`}>
+                      평가 {t.judge.score}점 · {t.judge.grounded ? "근거 준수" : "근거 이탈"} · {t.judge.noHalluc ? "환각 없음" : "환각 의심"}{t.judge.cited ? " · 출처 표시" : " · 출처 누락"}{t.judge.refusal ? " · 정당한 거부" : ""}
                       {t.judge.comment && <em> “{t.judge.comment}”</em>}
+                      <span className="judge-by"> · 판정 {t.judgeBy === "gemini-3.5-flash" ? "gemini-3.5-flash" : "qwen3.5:2b 자기평가"}</span>
                     </span>
-                  ) : apiKey ? (
-                    <span className="judge">평가 중…</span>
+                  ) : t.judgeError ? (
+                    <span className="judge fail">판정 실패 — 평가 모델이 결과를 만들지 못했습니다 (답변은 정상)</span>
+                  ) : judgeBusy && i === turns.length - 1 ? (
+                    <span className="judge">④ 판정 중… (LLM-as-a-Judge)</span>
                   ) : null}
                   <span className="feedback">
                     <button aria-label="좋아요" className={t.feedback === "up" ? "on" : ""} onClick={() => setFeedback(i, "up")}>👍</button>
