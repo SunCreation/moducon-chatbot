@@ -22,7 +22,7 @@ type Phase = "idle" | "embed" | "search" | "stream" | "error-ollama";
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
   embed: "① 질문 임베딩 중 — 브라우저에서 질문을 벡터로 바꿉니다",
-  search: "② 근거 검색 중 — 문서 벡터와 코사인 유사도로 상위 3개를 찾습니다",
+  search: "② 근거 검색 중 — 벡터 유사도 상위 10개 + 단어 일치 상위 5개, 총 15개를 찾습니다",
   stream: "③ 답변 생성 중 — 찾은 근거를 붙여 모델이 답을 씁니다",
   "error-ollama": "연결 실패",
 };
@@ -68,7 +68,7 @@ export default function App() {
       setPhase("embed");
       await new Promise((r) => setTimeout(r, 350)); // 임베딩 단계를 눈으로 볼 수 있게 짧게 표시
       setPhase("search");
-      const hits = await retrieve(q, 3);
+      const hits = await retrieve(q, 15);
       setDlPct(null);
       setLastHits(hits);
       await new Promise((r) => setTimeout(r, 450)); // 검색 결과를 눈으로 볼 수 있게 표시
@@ -280,7 +280,7 @@ export default function App() {
                 <div className="chips">
                   {t.sources.map((s) => (
                     <button key={s.chunk.id} className="chip" onClick={() => setShowSource(t.sources!)}>
-                      {s.chunk.id} · {s.chunk.section} · {(s.score * 100).toFixed(0)}%
+                      {s.chunk.id} · {s.chunk.section} · {s.method === "word" ? "단어" : "벡터"} {(s.score * 100).toFixed(0)}%
                     </button>
                   ))}
                 </div>
@@ -312,7 +312,7 @@ export default function App() {
                 <div key={h.chunk.id} className="hit-row">
                   <span className="hit-id">{h.chunk.id}</span>
                   <span className="hit-sec">{h.chunk.section}</span>
-                  <span className="hit-score">{(h.score * 100).toFixed(1)}%</span>
+                  <span className="hit-score">{h.method === "word" ? "단어" : "벡터"} {(h.score * 100).toFixed(1)}%</span>
                   <span className="hit-text">{h.chunk.text.slice(0, 80)}…</span>
                 </div>
               ))}
@@ -348,7 +348,7 @@ export default function App() {
             {showSource.map((s) => (
               <div key={s.chunk.id} className="source-item">
                 <div className="source-meta">
-                  {s.chunk.id} · {s.chunk.section} · 유사도 {(s.score * 100).toFixed(0)}%
+                  {s.chunk.id} · {s.chunk.section} · {s.method === "word" ? "단어 일치" : "벡터 유사도"} {(s.score * 100).toFixed(0)}%
                 </div>
                 <p>{s.chunk.text}</p>
                 <a href={s.chunk.url} target="_blank" rel="noreferrer">원문 보기 →</a>

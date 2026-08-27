@@ -36,7 +36,22 @@ export function onEmbedProgress(cb: (p: EmbedProgress) => void) {
   progressCb = cb;
 }
 
+// 모델 파일 캐시 — HF resolve URL은 요청마다 서명이 다른 CDN 주소로 리다이렉트되어
+// HTTP 캐시가 히트하지 않는다. Cache Storage에 직접 보관해 재방문 시 재다운로드를 막는다.
+const MODEL_CACHE = "moducon-embed-v1";
+
 async function fetchWithProgress(url: string, file: string): Promise<Uint8Array> {
+  let cache: Cache | null = null;
+  try {
+    cache = await caches.open(MODEL_CACHE);
+    const hit = await cache.match(url);
+    if (hit) {
+      progressCb?.({ pct: 100, file });
+      return new Uint8Array(await hit.arrayBuffer());
+    }
+  } catch {
+    cache = null; // 캐시 API를 쓸 수 없는 환경 — 그냥 내려받는다
+  }
   const res = await fetch(url);
   if (!res.ok) throw new Error(`모델 파일 내려받기 실패 (${res.status}): ${file}`);
   const total = Number(res.headers.get("content-length") ?? 0);
@@ -61,6 +76,13 @@ async function fetchWithProgress(url: string, file: string): Promise<Uint8Array>
   for (const c of chunks) {
     out.set(c, offset);
     offset += c.length;
+  }
+  if (cache) {
+    try {
+      await cache.put(url, new Response(out));
+    } catch {
+      /* 용량 초과 등으로 캐시 저장에 실패해도 이번 실행은 계속한다 */
+    }
   }
   return out;
 }
@@ -131,19 +153,56 @@ export async function loadCorpus(): Promise<DocChunk[]> {
 export interface Retrieved {
   chunk: DocChunk;
   score: number;
+  method: "vector" | "word";
 }
 
-/** 질문 벡터와 코퍼스 벡터의 내적(=코사인) 상위 k개 */
-export async function retrieve(question: string, k = 3): Promise<Retrieved[]> {
+// 단어 검색용 불용어 — 조사·접속사·군더더기 표현 (2글자 이상만 걸러낸다)
+const STOPWORDS = new Set([
+  "에서", "에게", "한테", "부터", "까지", "처럼", "같이", "마다", "보다", "라는",
+  "무엇", "언제", "어디", "누구", "어떤", "어떻게", "왜요", "인가요", "나요",
+  "있는", "없는", "하는", "했던", "하는지", "인지", "니까", "이며", "하고",
+  "주세요", "알려줘", "알려주세요", "가르쳐", "가르쳐줘", "말해줘", "해줘",
+  "해주세요", "해주실", "그리고", "그래서", "하지만", "그런데", "근데", "the", "is", "what", "when", "where", "how", "about", "please", "tell",
+]);
+
+/** 질문에서 검색어 뽑기 — 소문자 통일, 1글자·불용어 제거 */
+function queryTerms(q: string): string[] {
+  return q
+    .toLowerCase()
+    .split(/[^가-힣a-z0-9]+/)
+    .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
+}
+
+/** 단어 기반 점수(0~1) — 검색어가 조각에 포함되는 비율.
+ *  부분 문자열로 비교해 조사가 붙은 형태("모두콘의")도 "모두콘"에 맞게 한다. */
+function wordScore(question: string, text: string): number {
+  const terms = queryTerms(question);
+  if (!terms.length) return 0;
+  const low = text.toLowerCase();
+  let hit = 0;
+  for (const t of terms) if (low.includes(t)) hit++;
+  return hit / terms.length;
+}
+
+/** 하이브리드 검색 — 벡터 유사도 상위 10개 + 단어 일치 상위 5개(벡터 결과와 중복 제외) */
+export async function retrieve(question: string, k = 15): Promise<Retrieved[]> {
   const [docs, q] = await Promise.all([loadCorpus(), embed(question)]);
-  const scored = docs.map((chunk) => {
-    let dot = 0;
-    const v = chunk.vector;
-    for (let i = 0; i < v.length; i++) dot += v[i] * q[i];
-    return { chunk, score: dot };
-  });
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, k);
+  const vec = docs
+    .map((chunk) => {
+      let dot = 0;
+      const v = chunk.vector;
+      for (let i = 0; i < v.length; i++) dot += v[i] * q[i];
+      return { chunk, score: dot, method: "vector" as const };
+    })
+    .sort((a, b) => b.score - a.score);
+  const topVec = vec.slice(0, Math.min(10, k));
+  const picked = new Set(topVec.map((r) => r.chunk.id));
+  const lex = docs
+    .map((chunk) => ({ chunk, score: wordScore(question, chunk.text), method: "word" as const }))
+    .filter((r) => r.score > 0 && !picked.has(r.chunk.id))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, k - topVec.length));
+  return [...topVec, ...lex];
 }
 
 /** RAG 시스템 지시 — 근거 원칙을 고정 */

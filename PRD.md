@@ -28,7 +28,7 @@ GitHub Pages (정적) — SunCreation/moducon-chatbot, Actions로 main push마�
          ① 질의 임베딩  — transformers.js 토크나이저 + ORT 직접 세션
                           (embeddinggemma-300m, 768차원, model_no_gather_q4 변형 —
                            브라우저 WASM ORT가 q4 Gather 노드를 지원하지 않아 회피)
-         ② 근거 검색    — moducon-docs.json 37청크와 코사인 유사도 top-3
+         ② 근거 검색    — 하이브리드: 벡터 유사도 top-10 + 단어 일치 top-5 (총 15)
                           최고 유사도 < 0.55면 '근거 약함' 경고 배지
          ③ 답변 생성    — 로컬: ollama qwen3.5:2b 스트리밍 (fetch + ReadableStream)
                           옵션: Gemini API streamGenerateContent SSE (사용자 키, 브라우저 직접)
@@ -37,7 +37,7 @@ GitHub Pages (정적) — SunCreation/moducon-chatbot, Actions로 main push마�
          ④ 판정         — LLM-as-a-Judge: 답변에 쓴 엔진과 같은 모델이 JSON으로 채점
          ⑤ 피드백       — 👍👎 토글 (세션 내)
 ```
-- 임베딩 모델(~200MB)은 첫 방문 1회 다운로드 후 브라우저 캐시(진행률 표시).
+- 임베딩 모델(~200MB)은 첫 방문 1회 다운로드 후 Cache Storage(`moducon-embed-v1`)에 보관해 재사용(진행률 표시). HF resolve URL이 매번 다른 서명 CDN으로 리다이렉트되어 HTTP 캐시가 히트하지 않으므로 Cache API를 직접 사용.
 - 청킹·임베딩은 사전 오프라인 단계(python: fastembed로 청크 정의 → gemma 768d 재임베딩)로 수행하고 결과 JSON을 정적 파일로 배포. 런타임에 임베딩되는 것은 사용자 질문뿐이며, 오프라인·브라우저가 같은 벡터 공간(gemma)을 쓴다.
 
 ## 4. 기능 명세
@@ -46,7 +46,8 @@ GitHub Pages (정적) — SunCreation/moducon-chatbot, Actions로 main push마�
 - 모두콘이란 / 연혁(2018~2025) / 참가 방법 / 프로그램 / FAQ
 
 ### 4.2 챗봇 파이프라인
-- 단계 표시: ① 임베딩 → ② 검색(근거 박스: ID·섹션·유사도·본문 미리보기) → ③ 스트리밍 답변 → ④ 판정
+- 단계 표시: ① 임베딩 → ② 검색(근거 박스: ID·섹션·검색 방식·점수·본문 미리보기) → ③ 스트리밍 답변 → ④ 판정
+- 하이브리드 검색(2026-08 추가): 질문당 근거 15개 — ① 벡터 유사도(코사인) 상위 10개, ② 단어 기반 점수(질문 검색어가 조각에 포함되는 비율, 불용어·조사 제거, 부분 일치) 상위 5개. 단어 결과는 벡터 결과와 중복 제외, 점수 0은 제외. 근거 박스·칩·모달에 벡터/단어 구분 표시
 - 출처 칩 클릭 → 근거 조각 전문 모달(원문 링크 포함)
 - 약근거 경고: top-1 유사도 < 0.55면 ⚠ 배지 + 프롬프트에 보수 지시 주입
 - 시간 컨텍스트: buildPrompt() 호출 시점의 KST 시각을 시스템 프롬프트에 명시, 상대 시간 표현 해석 기준으로 사용
