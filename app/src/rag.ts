@@ -1,8 +1,21 @@
 // 모두콘 안내 챗봇 — RAG 유틸리티
-// 임베딩: transformers.js (bge-small-en-v1.5, 브라우저 실행)
+// 임베딩: embeddinggemma-300m (model_no_gather_q4 변형 — 브라우저 WASM ORT 호환)
+//   - transformers.js pipeline()은 q4/q8 기본 파일을 골라 GatherBlockQuantized
+//     미지원으로 실패하므로, 토크나이저만 transformers.js로 쓰고
+//     ORT 세션은 no_gather_q4 파일로 직접 만든다 (2026-08 헤드리스 검증).
 // 검색: moducon-docs.json 정적 벡터스토어와 코사인 유사도 top-k
 
-import { pipeline, type FeatureExtractionPipeline } from "@huggingface/transformers";
+import { AutoTokenizer, type PreTrainedTokenizer } from "@huggingface/transformers";
+
+const MODEL_ID = "onnx-community/embeddinggemma-300m-ONNX";
+const HF_ONNX = `https://huggingface.co/${MODEL_ID}/resolve/main/onnx`;
+// transformers.js 4.2.0이 쓰는 것과 같은 onnxruntime-web 빌드 (검증된 조합)
+const ORT_URL =
+  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0-dev.20260416-b7804b056c/dist/ort.webgpu.bundle.min.mjs";
+
+interface OrtSession {
+  run(feeds: Record<string, unknown>): Promise<Record<string, { dims: number[]; data: Float32Array }>>;
+}
 
 export interface DocChunk {
   id: string;
@@ -12,26 +25,97 @@ export interface DocChunk {
   vector: number[];
 }
 
-let embedder: FeatureExtractionPipeline | null = null;
-let embedderReady: Promise<FeatureExtractionPipeline> | null = null;
+let session: OrtSession | null = null;
+let tokenizer: PreTrainedTokenizer | null = null;
+let ready: Promise<void> | null = null;
 
-/** 임베딩 파이프라인 로드 (첫 호출 시 모델 다운로드, 이후 캐시) */
-export function getEmbedder(): Promise<FeatureExtractionPipeline> {
-  if (embedder) return Promise.resolve(embedder);
-  if (!embedderReady) {
-    embedderReady = pipeline("feature-extraction", "onnx-community/embeddinggemma-300m-ONNX", { dtype: "q4" } as never).then((p) => {
-      embedder = p as FeatureExtractionPipeline;
-      return embedder;
-    });
-  }
-  return embedderReady;
+/** 임베딩 모델 내려받기 진행률 (첫 방문 1회, 이후 브라우저 캐시) */
+export type EmbedProgress = { pct: number; file: string };
+let progressCb: ((p: EmbedProgress) => void) | null = null;
+export function onEmbedProgress(cb: (p: EmbedProgress) => void) {
+  progressCb = cb;
 }
 
-/** 문장 → 384차원 벡터 (정규화 포함 — 코사인 = 내적) */
+async function fetchWithProgress(url: string, file: string): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`모델 파일 내려받기 실패 (${res.status}): ${file}`);
+  const total = Number(res.headers.get("content-length") ?? 0);
+  if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let got = 0;
+  let lastPct = -1;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    const pct = Math.round((got / total) * 100);
+    if (pct !== lastPct) {
+      lastPct = pct;
+      progressCb?.({ pct, file });
+    }
+  }
+  const out = new Uint8Array(got);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return out;
+}
+
+/** 토크나이저 + ORT 세션 준비 (첫 호출 시 모델 다운로드, 이후 HTTP 캐시) */
+function ensureReady(): Promise<void> {
+  if (session && tokenizer) return Promise.resolve();
+  if (!ready) {
+    ready = (async () => {
+      const ort = (await import(/* @vite-ignore */ ORT_URL)) as {
+        InferenceSession: { create(
+          buf: Uint8Array,
+          opts: { executionProviders: string[]; externalData: { path: string; data: Uint8Array }[] },
+        ): Promise<OrtSession> };
+      };
+      const core = await fetchWithProgress(`${HF_ONNX}/model_no_gather_q4.onnx`, "model_no_gather_q4.onnx");
+      const data = await fetchWithProgress(`${HF_ONNX}/model_no_gather_q4.onnx_data`, "model_no_gather_q4.onnx_data");
+      session = await ort.InferenceSession.create(core, {
+        executionProviders: ["wasm"],
+        externalData: [{ path: "model_no_gather_q4.onnx_data", data }],
+      });
+      tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID);
+    })().catch((e) => {
+      ready = null; // 실패 시 다음 질문에서 재시도 가능
+      throw e;
+    });
+  }
+  return ready;
+}
+
+/** 문장 → 768차원 벡터 (mean pooling + L2 정규화 — 벡터스토어 생성 방식과 동일) */
 export async function embed(text: string): Promise<number[]> {
-  const ext = await getEmbedder();
-  const out = await ext(text, { pooling: "mean", normalize: true });
-  return Array.from(out.data as Float32Array);
+  await ensureReady();
+  const { input_ids, attention_mask } = await tokenizer!(text);
+  const out = await session!.run({ input_ids, attention_mask });
+  const hs = out.last_hidden_state;
+  const [, seq, hid] = hs.dims;
+  const am = attention_mask.data as ArrayLike<bigint> | ArrayLike<number>;
+  const acc = new Float64Array(hid);
+  let cnt = 0;
+  for (let s = 0; s < seq; s++) {
+    const w = Number(am[s]);
+    cnt += w;
+    if (!w) continue;
+    for (let h = 0; h < hid; h++) acc[h] += hs.data[s * hid + h];
+  }
+  let norm = 0;
+  for (let h = 0; h < hid; h++) {
+    acc[h] /= cnt;
+    norm += acc[h] * acc[h];
+  }
+  norm = Math.sqrt(norm);
+  const vec = new Array<number>(hid);
+  for (let h = 0; h < hid; h++) vec[h] = acc[h] / norm;
+  return vec;
 }
 
 let corpus: DocChunk[] | null = null;

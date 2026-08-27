@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { retrieve, buildPrompt, loadCorpus, type Retrieved } from "./rag";
+import { retrieve, buildPrompt, loadCorpus, onEmbedProgress, type Retrieved } from "./rag";
 import { chatStream, pingOllama, type ChatMsg } from "./ollama";
 import { geminiStream, judgeTurn, type JudgeResult } from "./gemini";
 import "./App.css";
@@ -39,12 +39,14 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("gemini_key") ?? "");
   const [showSource, setShowSource] = useState<Retrieved[] | null>(null);
   const [lastHits, setLastHits] = useState<Retrieved[] | null>(null);
+  const [dlPct, setDlPct] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     pingOllama().then(setOllamaOk);
     loadCorpus().catch(() => undefined); // 프리로드
+    onEmbedProgress(({ pct }) => setDlPct(pct >= 100 ? null : pct));
   }, []);
 
   useEffect(() => {
@@ -57,11 +59,13 @@ export default function App() {
     setInput("");
     setTurns((t) => [...t, { role: "user", content: q }]);
 
+    let streamStarted = false;
     try {
       setPhase("embed");
       await new Promise((r) => setTimeout(r, 350)); // 임베딩 단계를 눈으로 볼 수 있게 짧게 표시
       setPhase("search");
       const hits = await retrieve(q, 3);
+      setDlPct(null);
       setLastHits(hits);
       await new Promise((r) => setTimeout(r, 450)); // 검색 결과를 눈으로 볼 수 있게 표시
       const prompt = buildPrompt(q, hits);
@@ -77,6 +81,7 @@ export default function App() {
       const lastQ = q;
       setTurns((t) => [...t, { role: "assistant", content: "", sources: hits, question: lastQ }]);
       setPhase("stream");
+      streamStarted = true;
       abortRef.current = new AbortController();
       let acc = "";
       const onPiece = (piece: string) => {
@@ -115,14 +120,20 @@ export default function App() {
         } catch { /* 평가 실패는 답변을 해치지 않음 */ }
       }
     } catch (e: unknown) {
-      const status = (e as { status?: number }).status;
-      if (status === 403) {
-        setPhase("error-ollama");
-        setOllamaOk(false);
-      } else {
-        setPhase("error-ollama");
-        setOllamaOk(false);
+      console.error("챗봇 파이프라인 오류:", e);
+      setDlPct(null);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!streamStarted) {
+        // 검색/임베딩 단계 오류 — 원인을 채팅창에 그대로 보여준다 (ollama와 무관)
+        setTurns((t) => [
+          ...t.filter((x) => x.content !== ""),
+          { role: "assistant", content: `⚠ 답변을 만들지 못했습니다 — ${msg}` },
+        ]);
+        setPhase("idle");
+        return;
       }
+      setPhase("error-ollama");
+      setOllamaOk(false);
       setTurns((t) => t.filter((x) => x.content !== ""));
     }
   }
@@ -253,10 +264,17 @@ export default function App() {
           {(phase === "embed" || phase === "search") && (
             <div className="phase-box">
               <span className="spinner" />
-              <span>{PHASE_LABEL[phase]}</span>
+              <span>
+                {PHASE_LABEL[phase]}
+                {dlPct !== null && (
+                  <div className="dl-progress">
+                    임베딩 모델을 내려받는 중 {dlPct}% — 첫 방문 1회(약 200MB), 이후 브라우저에 캐시됩니다
+                  </div>
+                )}
+              </span>
             </div>
           )}
-          {phase === "stream" && lastHits && (
+          {lastHits && (phase === "stream" || phase === "idle") && (
             <div className="hits-box">
               <div className="hits-title">
                 ② 검색된 근거 (상위 {lastHits.length}개)
@@ -272,7 +290,9 @@ export default function App() {
                   <span className="hit-text">{h.chunk.text.slice(0, 80)}…</span>
                 </div>
               ))}
-              <div className="hits-title" style={{ marginTop: ".6rem" }}>③ 이 근거로 답변을 만듭니다…</div>
+              {phase === "stream" && (
+                <div className="hits-title" style={{ marginTop: ".6rem" }}>③ 이 근거로 답변을 만듭니다…</div>
+              )}
             </div>
           )}
           <div ref={bottomRef} />
@@ -316,7 +336,7 @@ export default function App() {
       <footer className="footer">
         <p>
           모두콘 안내 챗봇 — 로컬 실행 데모. 자료: 모두의연구소 공개 페이지.
-          모델: qwen3.5:2b (ollama) · 임베딩: bge-small-en-v1.5 (브라우저).
+          모델: qwen3.5:2b (ollama) · 임베딩: embeddinggemma-300m (브라우저).
         </p>
       </footer>
     </div>

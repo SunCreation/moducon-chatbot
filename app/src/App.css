@@ -96,3 +96,11 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .hit-text { color: #444; line-height: 1.5; }
 
 .weak-badge { color: #b71c1c; font-weight: 600; font-size: .72rem; background: #fdecea; border-radius: 6px; padding: .1rem .4rem; margin-left: .3rem; }
+.dl-progress {
+  margin-top: .35rem;
+  font-size: .78rem;
+  color: #8a6d1a;
+  background: #fff8e1;
+  border-radius: 8px;
+  padding: .3rem .55rem;
+}
