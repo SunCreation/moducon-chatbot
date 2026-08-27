@@ -15,6 +15,15 @@ interface Turn {
 
 type Phase = "idle" | "embed" | "search" | "stream" | "error-ollama";
 
+// 파이프라인 단계 — 튜토리얼용 표시
+const PHASE_LABEL: Record<Phase, string> = {
+  idle: "",
+  embed: "① 질문 임베딩 중 — 브라우저에서 질문을 벡터로 바꿉니다",
+  search: "② 근거 검색 중 — 문서 벡터와 코사인 유사도로 상위 3개를 찾습니다",
+  stream: "③ 답변 생성 중 — 찾은 근거를 붙여 모델이 답을 씁니다",
+  "error-ollama": "연결 실패",
+};
+
 export default function App() {
   const [turns, setTurns] = useState<Turn[]>([
     {
@@ -29,6 +38,7 @@ export default function App() {
   const [engine, setEngine] = useState<"local" | "gemini">("local");
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("gemini_key") ?? "");
   const [showSource, setShowSource] = useState<Retrieved[] | null>(null);
+  const [lastHits, setLastHits] = useState<Retrieved[] | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -48,8 +58,12 @@ export default function App() {
     setTurns((t) => [...t, { role: "user", content: q }]);
 
     try {
+      setPhase("embed");
+      await new Promise((r) => setTimeout(r, 350)); // 임베딩 단계를 눈으로 볼 수 있게 짧게 표시
       setPhase("search");
       const hits = await retrieve(q, 3);
+      setLastHits(hits);
+      await new Promise((r) => setTimeout(r, 450)); // 검색 결과를 눈으로 볼 수 있게 표시
       const prompt = buildPrompt(q, hits);
       const messages: ChatMsg[] = [
         {
@@ -236,7 +250,31 @@ export default function App() {
               )}
             </div>
           ))}
-          {phase === "search" && <div className="bubble assistant">근거를 찾고 있습니다…</div>}
+          {(phase === "embed" || phase === "search") && (
+            <div className="phase-box">
+              <span className="spinner" />
+              <span>{PHASE_LABEL[phase]}</span>
+            </div>
+          )}
+          {phase === "stream" && lastHits && (
+            <div className="hits-box">
+              <div className="hits-title">
+                ② 검색된 근거 (상위 {lastHits.length}개)
+                {lastHits[0].score < 0.55 && (
+                  <span className="weak-badge"> ⚠ 최고 유사도 {(lastHits[0].score * 100).toFixed(1)}% — 근거가 약합니다</span>
+                )}
+              </div>
+              {lastHits.map((h) => (
+                <div key={h.chunk.id} className="hit-row">
+                  <span className="hit-id">{h.chunk.id}</span>
+                  <span className="hit-sec">{h.chunk.section}</span>
+                  <span className="hit-score">{(h.score * 100).toFixed(1)}%</span>
+                  <span className="hit-text">{h.chunk.text.slice(0, 80)}…</span>
+                </div>
+              ))}
+              <div className="hits-title" style={{ marginTop: ".6rem" }}>③ 이 근거로 답변을 만듭니다…</div>
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
         <div className="chat-input">

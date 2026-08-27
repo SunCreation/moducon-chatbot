@@ -67,9 +67,13 @@ export function buildPrompt(question: string, hits: Retrieved[]): string {
   const context = hits
     .map((h) => `[${h.chunk.id} | ${h.chunk.section}] ${h.chunk.text}`)
     .join("\n\n");
+  const best = hits[0]?.score ?? 0;
+  const weakNote = best < 0.55
+    ? "주의: 검색된 조각의 유사도가 낮습니다. 질문과 완전히 맞는 근거가 아닐 수 있으니, 근거에 있는 내용만 짧게 답하고 자료에 없는 부분은 없다고 말합니다."
+    : "자료에 근거한 내용만 답하고, 자료에 없으면 없다고 말합니다.";
   return [
     "다음 자료는 모두의연구소의 컨퍼런스 '모두콘'에 대한 공개 문서에서 뽑은 조각입니다.",
-    "자료에 근거한 내용만 답하고, 자료에 없으면 없다고 말합니다.",
+    weakNote,
     "근거가 된 조각의 [ID]를 답 안에서 표시합니다.",
     "",
     "[자료]",
