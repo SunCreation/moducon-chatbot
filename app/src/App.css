@@ -75,3 +75,9 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .feedback { display: flex; gap: .25rem; }
 .feedback button { border: 1px solid #ddd; background: #fff; border-radius: 6px; cursor: pointer; padding: .15rem .4rem; font-size: .85rem; }
 .feedback button.on { background: #eef5fa; border-color: var(--blue); }
+
+/* OS guide */
+.os-guide { display: grid; gap: .5rem; margin-top: .5rem; }
+.os-guide > div { background: #fffdf5; border: 1px solid #e8ddab; border-radius: 8px; padding: .6rem .8rem; font-size: .84rem; line-height: 1.6; }
+.os-guide strong { color: var(--blue); margin-right: .5rem; }
+.os-guide code { background: #f4efdc; padding: .1rem .35rem; border-radius: 4px; font-size: .82em; }

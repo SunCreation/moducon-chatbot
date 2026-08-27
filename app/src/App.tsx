@@ -165,13 +165,15 @@ export default function App() {
         <div className="banner">
           <strong>로컬 모델(ollama)에 연결할 수 없습니다.</strong>
           <ol>
-            <li><code>ollama serve</code> 실행 (또는 Ollama 앱 실행)</li>
+            <li><code>ollama serve</code> 실행 (또는 Ollama 앱 실행) · 모델 확인: <code>ollama pull qwen3.5:2b</code></li>
             <li>
-              github.io에서 열었다면 CORS 허용:{" "}
-              <code>launchctl setenv OLLAMA_ORIGINS "https://*.github.io"</code>{" "}
-              후 Ollama 재시작
+              github.io에서 열었다면 CORS 허용 — 운영 체제별로 한 번만 설정하고 Ollama를 재시작합니다:
+              <div className="os-guide">
+                <div><strong>macOS</strong><code>launchctl setenv OLLAMA_ORIGINS "https://*.github.io"</code>입력 후 메뉴 막대의 Ollama 앱을 종료하고 다시 실행합니다.</div>
+                <div><strong>Windows</strong>작업 표시줄에서 Ollama를 종료합니다. 설정에서 <code>환경 변수</code>를 검색해 <code>계정의 환경 변수 편집</code>을 열고 새 변수 <code>OLLAMA_ORIGINS</code>에 <code>https://*.github.io</code>를 넣은 뒤 Ollama를 다시 시작합니다.</div>
+                <div><strong>Linux</strong><code>sudo systemctl edit ollama.service</code>를 열어 <code>[Service]</code> 아래에 <code>Environment="OLLAMA_ORIGINS=https://*.github.io"</code>를 추가하고 <code>sudo systemctl restart ollama</code>로 재시작합니다.</div>
+              </div>
             </li>
-            <li>모델 확인: <code>ollama pull qwen3.5:2b</code></li>
           </ol>
           <button onClick={() => pingOllama().then(setOllamaOk)}>다시 확인</button>
         </div>
