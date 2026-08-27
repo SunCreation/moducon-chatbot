@@ -148,6 +148,11 @@ export async function retrieve(question: string, k = 3): Promise<Retrieved[]> {
 
 /** RAG 시스템 지시 — 근거 원칙을 고정 */
 export function buildPrompt(question: string, hits: Retrieved[]): string {
+  const now = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric", month: "long", day: "numeric", weekday: "long",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  }).format(new Date());
   const context = hits
     .map((h) => `[${h.chunk.id} | ${h.chunk.section}] ${h.chunk.text}`)
     .join("\n\n");
@@ -159,6 +164,7 @@ export function buildPrompt(question: string, hits: Retrieved[]): string {
     "다음 자료는 모두의연구소의 컨퍼런스 '모두콘'에 대한 공개 문서에서 뽑은 조각입니다.",
     weakNote,
     "근거가 된 조각의 [ID]를 답 안에서 표시합니다.",
+    `현재 시각은 ${now}(한국 표준시 KST)입니다. '지금', '올해', '다음 주' 같은 상대 표현은 이 시각을 기준으로 해석합니다.`,
     "",
     "[자료]",
     context,

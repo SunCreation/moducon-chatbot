@@ -73,7 +73,7 @@ export default function App() {
         {
           role: "system",
           content:
-            "당신은 모두의연구소 컨퍼런스 '모두콘'의 안내 도우미입니다. 주어진 자료에 근거한 내용만 답하고, 자료에 없는 정보는 '제가 가진 자료에는 없습니다'라고 답합니다. 근거 조각의 [ID]를 답에 표시합니다.",
+            "당신은 모두의연구소 컨퍼런스 '모두콘'의 안내 도우미입니다. 주어진 자료에 근거한 내용만 답하고, 자료에 없는 정보는 '제가 가진 자료에는 없습니다'라고 답합니다. 근거 조각의 [ID]를 답에 표시합니다. 사용자가 보낸 현재 시각(KST)을 기준으로 '지금', '올해', 'D-7' 같은 시간 표현을 해석하고, 남은 날짜 같은 계산이 필요하면 그 계산을 보여줍니다. 단 행사 일정 자체는 자료에 있는 날짜만 사용합니다.",
         },
         { role: "user", content: prompt },
       ];
@@ -194,6 +194,7 @@ export default function App() {
         <div className="banner">
           <strong>로컬 모델(ollama)에 연결할 수 없습니다.</strong>
           <ol>
+            <li>브라우저 확인 — Safari는 이 페이지(https)에서 로컬 ollama 호출을 차단하므로 Chrome·Edge를 사용하세요. Chrome에서 "로컬 네트워크" 접근 권한을 물으면 <strong>허용</strong>을 누릅니다.</li>
             <li><code>ollama serve</code> 실행 (또는 Ollama 앱 실행) · 모델 확인: <code>ollama pull qwen3.5:2b</code></li>
             <li>
               github.io에서 열었다면 CORS 허용 — 운영 체제별로 한 번만 설정하고 Ollama를 재시작합니다:

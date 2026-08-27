@@ -29,7 +29,7 @@ cd app && npm run build
 ```
 
 ## 구조
-- `docs/` — 모두콘 공개 자료 청크·벡터 (28청크, embeddinggemma 768차원)
+- `docs/` — 모두콘 공개 자료 청크·벡터 (37청크, embeddinggemma 768차원; 2025 본행사 + 역대 회차 2018~2024 + 모두의연구소 소개)
 - `app/src/rag.ts` — 질문 임베딩·코사인 검색·프롬프트 조립
 - `app/src/ollama.ts` — 로컬 스트리밍 클라이언트
 - `app/src/gemini.ts` — Gemini 스트리밍 + LLM-as-a-Judge
