@@ -45,6 +45,7 @@ export default function App() {
   const [dlPct, setDlPct] = useState<number | null>(null);
   const [judgeBusy, setJudgeBusy] = useState(false);
   const [openSrc, setOpenSrc] = useState<Record<number, boolean>>({});
+  const [hitsOpen, setHitsOpen] = useState(false);
   const [embedCached, setEmbedCached] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -77,6 +78,7 @@ export default function App() {
       const hits = await retrieve(q, 15);
       setDlPct(null);
       setLastHits(hits);
+      setHitsOpen(false);
       await new Promise((r) => setTimeout(r, 450)); // 검색 결과를 눈으로 볼 수 있게 표시
       const prompt = buildPrompt(q, hits);
       const messages: ChatMsg[] = [
@@ -352,23 +354,27 @@ export default function App() {
           {lastHits && phase === "stream" && (
             <div className="hits-box">
               <div className="hits-title">
-                ② 검색된 근거 {lastHits.length}개 — 벡터 {lastHits.length - nBm} · BM25 {nBm}
+                <button className="chips-toggle" onClick={() => setHitsOpen((o) => !o)}>
+                  ② 검색된 근거 {lastHits.length}개 — 벡터 {lastHits.length - nBm} · BM25 {nBm}{" "}
+                  {hitsOpen ? "접기 ▴" : "펼쳐 보기 ▾"}
+                </button>
                 {lastHits[0].score < 0.55 && (
                   <span className="weak-badge"> ⚠ 최고 유사도 {(lastHits[0].score * 100).toFixed(1)}% — 근거가 약합니다</span>
                 )}
               </div>
-              {lastHits.map((h) => (
-                <div key={h.chunk.id} className={`hit-row ${h.method === "bm25" ? "bm25" : "vec"}`}>
-                  <span className="hit-id">{h.chunk.id}</span>
-                  <span className="hit-sec">{h.chunk.section}</span>
-                  <span className="hit-score" style={{ "--w": `${Math.round(h.score * 100)}%` } as CSSProperties}>
-                    {h.method === "bm25" ? "BM25" : "벡터"} {(h.score * 100).toFixed(1)}%
-                  </span>
-                  <span className="hit-text">{h.chunk.text.slice(0, 80)}…</span>
-                </div>
-              ))}
+              {hitsOpen &&
+                lastHits.map((h) => (
+                  <div key={h.chunk.id} className={`hit-row ${h.method === "bm25" ? "bm25" : "vec"}`}>
+                    <span className="hit-id">{h.chunk.id}</span>
+                    <span className="hit-sec">{h.chunk.section}</span>
+                    <span className="hit-score" style={{ "--w": `${Math.round(h.score * 100)}%` } as CSSProperties}>
+                      {h.method === "bm25" ? "BM25" : "벡터"} {(h.score * 100).toFixed(1)}%
+                    </span>
+                    <span className="hit-text">{h.chunk.text.slice(0, 80)}…</span>
+                  </div>
+                ))}
               {phase === "stream" && (
-                <div className="hits-title" style={{ marginTop: ".6rem" }}>③ 이 근거로 답변을 만듭니다…</div>
+                <div className="hits-title" style={{ marginTop: hitsOpen ? ".6rem" : undefined }}>③ 이 근거로 답변을 만듭니다…</div>
               )}
             </div>
           )}
