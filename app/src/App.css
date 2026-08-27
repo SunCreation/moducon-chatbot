@@ -41,6 +41,8 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .bubble.assistant { align-self: flex-start; background: #fff; border: 1px solid #e4e7ec; }
 .bubble-text { min-height: 1.2em; }
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+.chips-toggle { font-size: .72rem; border: 1px solid #e4e7ec; color: var(--gray); background: transparent; border-radius: 999px; padding: .2rem .6rem; cursor: pointer; }
+.chips-toggle:hover { border-color: var(--blue); color: var(--blue); }
 .chip { font-size: .72rem; border: 1px solid var(--blue); color: var(--blue); background: var(--blue-soft); border-radius: 999px; padding: .2rem .6rem; cursor: pointer; }
 .chat-input { display: flex; gap: .6rem; margin-top: 1rem; }
 .chat-input input { flex: 1; padding: .8rem 1rem; border: 1px solid #ccc; border-radius: 10px; font-size: 1rem; font-family: inherit; }

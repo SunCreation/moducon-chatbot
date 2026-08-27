@@ -44,6 +44,7 @@ export default function App() {
   const [lastHits, setLastHits] = useState<Retrieved[] | null>(null);
   const [dlPct, setDlPct] = useState<number | null>(null);
   const [judgeBusy, setJudgeBusy] = useState(false);
+  const [openSrc, setOpenSrc] = useState<Record<number, boolean>>({});
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -92,7 +93,7 @@ export default function App() {
         acc += piece;
         setTurns((t) => {
           const copy = [...t];
-          copy[copy.length - 1] = { role: "assistant", content: acc, sources: hits };
+          copy[copy.length - 1] = { ...copy[copy.length - 1], content: acc, sources: hits };
           return copy;
         });
       };
@@ -278,11 +279,18 @@ export default function App() {
               )}
               {t.sources && (
                 <div className="chips">
-                  {t.sources.map((s) => (
-                    <button key={s.chunk.id} className="chip" onClick={() => setShowSource(t.sources!)}>
-                      {s.chunk.id} · {s.chunk.section} · {s.method === "word" ? "단어" : "벡터"} {(s.score * 100).toFixed(0)}%
-                    </button>
-                  ))}
+                  <button
+                    className="chips-toggle"
+                    onClick={() => setOpenSrc((m) => ({ ...m, [i]: !m[i] }))}
+                  >
+                    출처 {t.sources.length}개 {openSrc[i] ? "접기 ▴" : "펼쳐 보기 ▾"}
+                  </button>
+                  {openSrc[i] &&
+                    t.sources.map((s) => (
+                      <button key={s.chunk.id} className="chip" onClick={() => setShowSource(t.sources!)}>
+                        {s.chunk.id} · {s.chunk.section} · {s.method === "word" ? "단어" : "벡터"} {(s.score * 100).toFixed(0)}%
+                      </button>
+                    ))}
                 </div>
               )}
             </div>
