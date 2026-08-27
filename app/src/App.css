@@ -576,6 +576,7 @@ body {
   font-size: .8rem;
 }
 .hits-title { color: var(--ink); font-weight: 700; margin-bottom: .5rem; font-size: .8rem; }
+.hits-title .chips-toggle { margin-right: .5rem; font-weight: 400; }
 .hit-row {
   display: grid;
   grid-template-columns: 64px 110px 58px 1fr;
