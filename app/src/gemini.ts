@@ -1,5 +1,5 @@
 // 모두콘 안내 챗봇 — Gemini API 폴백 클라이언트 (사용자 API 키, 브라우저 직접 호출)
-import { buildJudgePrompt, parseJudge, type JudgeResult } from "./judge";
+import { judgeAll, type JudgeResult } from "./judge";
 
 export type { JudgeResult };
 export interface GeminiMsg { role: "user" | "model"; text: string }
@@ -55,8 +55,8 @@ export async function geminiStream(
   return full;
 }
 
-/** LLM-as-a-Judge(Gemini): 한 턴(질문·근거·답변)을 근거 준수·환각·출처 관점에서 평가.
- *  기준·파싱은 judge.ts 공통 로직 사용. */
+/** LLM-as-a-Judge(Gemini): 한 턴(질문·근거·답변)을 루브릭별로 병렬 채점해 평균.
+ *  기준·병렬·집계는 judge.ts 공통 로직 사용. */
 export async function judgeTurn(
   question: string,
   sources: string,
@@ -64,15 +64,16 @@ export async function judgeTurn(
   apiKey: string,
   model = "gemini-3.5-flash",
 ): Promise<JudgeResult> {
-  const prompt = buildJudgePrompt(question, sources, answer);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-  });
-  if (!res.ok) throw new Error(`judge ${res.status}`);
-  const j = await res.json();
-  const text: string = j.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  return parseJudge(text);
+  const call = async (prompt: string): Promise<string> => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    if (!res.ok) throw new Error(`judge ${res.status}`);
+    const j = await res.json();
+    return j.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  };
+  return judgeAll(question, sources, answer, call);
 }

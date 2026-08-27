@@ -292,7 +292,9 @@ export default function App() {
                 <div className="meta-row">
                   {t.judge ? (
                     <span className={`judge ${(t.judge.score ?? 0) >= 70 ? "ok" : "bad"}`}>
-                      평가 {t.judge.score}점 · {t.judge.grounded ? "근거 준수" : "근거 이탈"} · {t.judge.noHalluc ? "환각 없음" : "환각 의심"}{t.judge.cited ? " · 출처 표시" : " · 출처 누락"}{t.judge.refusal ? " · 정당한 거부" : ""}
+                      평가 {t.judge.score}점 (루브릭 평균) ·
+                      {(t.judge.rubrics ?? []).map((r) => ` ${r.name} ${r.score}`).join(" ·")}
+                      {t.judge.refusal ? " · 정당한 거부" : ""}
                       {t.judge.comment && <em> “{t.judge.comment}”</em>}
                       <span className="judge-by"> · 판정 {t.judgeBy === "gemini-3.5-flash" ? "gemini-3.5-flash" : "qwen3.5:2b 자기평가"}</span>
                     </span>

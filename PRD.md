@@ -70,15 +70,19 @@ GitHub Pages (정적) — SunCreation/moducon-chatbot, Actions로 main push마�
 - Gemini 엔진 → gemini-3.5-flash 평가 (generateContent, 비스트리밍)
 - 판정 기준·프롬프트·출력 파싱은 `judge.ts` 공통 모듈로 엔진 간 공유
 
-**평가 기준 (출력 스키마)**
-| 필드 | 판정 질문 | 출력 |
+**평가 설계 — 루브릭별 병렬 채점 → 평균**
+- 채점 루브릭 3개(근거 충실성·환각 통제·출처 표시)를 **각각 별도 프롬프트·별도 호출로 동시에(Promise.all)** 채점한다 — 한 프롬프트에 기준을 몰아넣으면 한 기준이 다른 기준 점수를 오염시키므로, 루브릭마다 "이 기준만 보고 다른 품질은 배제"라고 명시한다
+- `refusal`(정당한 거부)은 품질 점수가 아니라 상황 플래그이므로 4번째 병렬 호출로 bool만 판정 — 평균에서 제외
+- 최종 `score` = 루브릭 3개 점수의 **산술 평균**(반올림), `comment` = 최저점 루브릭의 평어(가장 약한 축 안내)
+- bool 축약(`grounded`/`noHalluc`/`cited`)은 각 루브릭 점수 70 이상에서 파생
+
+**루브릭 (각 0-100점)**
+| 루브릭 | 채점 기준 | 출력 |
 |---|---|---|
-| `grounded` | 답변 내용이 근거자료에서 나왔는가 | bool |
-| `noHalluc` | 근거에 없는 사실을 지어내지 않았는가 | bool |
-| `cited` | 답변 안에 근거 조각 [ID] 표시가 있는가 | bool |
-| `refusal` | 자료에 답이 없어 '없다'고 답한 경우 | bool |
-| `score` | 종합 점수 | 0-100 정수 |
-| `comment` | 평어 | 한두 문장 한국어 |
+| `grounded` 근거 충실성 | 모든 사실 주장이 근거자료에서 나왔는가. 무관·모순 주장 감점 | `{score, comment}` |
+| `noHalluc` 환각 통제 | 근거에 없는 날짜·숫자·이름·규칙을 지어내지 않았는가 | `{score, comment}` |
+| `cited` 출처 표시 | 주장마다 [ID] 표시가 있는가 (비율) | `{score, comment}` |
+| `refusal` 정당한 거부 | 근거가 없어 "없다"고 답한 상황인가 (평균 제외) | `{refusal: bool}` |
 
 **출력 신뢰성 확보**
 - ollama: `format:"json"` + `temperature:0`으로 JSON 문법 강제 (실측: qwen3.5:2b가 유효 판정 JSON 출력 확인)
@@ -86,7 +90,7 @@ GitHub Pages (정적) — SunCreation/moducon-chatbot, Actions로 main push마�
 - 공통 파싱 방어: 모델이 5점 만점으로 오해하면 100점 척도 환산, 불완전 필드는 기본값으로 보정
 
 **UI 표시**
-- 답변 아래 판정 배지: `평가 {score}점 · 근거 준수/이탈 · 환각 없음/의심 · 출처 표시/누락 (+ 정당한 거부)` + 평어 + 판정 엔진 라벨(`qwen3.5:2b 자기평가` / `gemini-3.5-flash`)
+- 답변 아래 판정 배지: `평가 {score}점 (루브릭 평균) · 근거 충실성 {n} · 환각 통제 {n} · 출처 표시 {n} (+ 정당한 거부)` + 평어 + 판정 엔진 라벨(`qwen3.5:2b 자기평가` / `gemini-3.5-flash`)
 - 점수 70점 기준 녹색(ok)/적색(bad) 배경
 - 판정 진행 중: `④ 판정 중… (LLM-as-a-Judge)`
 - 판정 실패: 주황 배지로 실패만 표시 — 답변·나머지 UI는 그대로 유지(평가 실패가 답변을 해치지 않는다)
@@ -138,3 +142,4 @@ GitHub Pages (정적) — SunCreation/moducon-chatbot, Actions로 main push마�
 - v1.0 — 첫 배포: 소개 페이지 + RAG 챗봇(bge 384d → gemma 768d 교체, no_gather_q4 워크어라운드)
 - v1.1 — Gemini API 엔진 옵션, 벡터스토어 28→37청크(역대 모두콘·모두의연구소), 질문 시점 시간 컨텍스트, OS별 CORS 가이드·Chrome 권장 배너
 - v1.2 — LLM-as-a-Judge 전 엔진 지원: 로컬 qwen 자기평가 추가(format:json), 판정 공통 모듈(judge.ts) 분리, 판정 엔진 라벨·실패 배지·'정당한 거부' 표시, PRD 전면 갱신
+- v1.3 — 판정을 루브릭별 병렬 채점(근거 충실성·환각 통제·출처 표시 각 0-100, Promise.all)으로 전환, 최종 점수=산술 평균, 배지에 루브릭별 점수 표시
