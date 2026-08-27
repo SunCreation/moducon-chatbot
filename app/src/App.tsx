@@ -134,7 +134,11 @@ export default function App() {
       }
       setPhase("error-ollama");
       setOllamaOk(false);
-      setTurns((t) => t.filter((x) => x.content !== ""));
+      setTurns((t) => [
+        ...t.filter((x) => x.content !== ""),
+        { role: "assistant", content: "⚠ 로컬 모델(ollama)에 연결하지 못했습니다 — 페이지 위 안내를 따라 ollama를 실행·설정한 뒤 다시 질문해 주세요." },
+      ]);
+      setPhase("idle");
     }
   }
 
