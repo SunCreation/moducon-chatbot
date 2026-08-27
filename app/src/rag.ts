@@ -29,11 +29,21 @@ let session: OrtSession | null = null;
 let tokenizer: PreTrainedTokenizer | null = null;
 let ready: Promise<void> | null = null;
 
-/** 임베딩 모델 내려받기 진행률 (첫 방문 1회, 이후 브라우저 캐시) */
-export type EmbedProgress = { pct: number; file: string };
+/** 임베딩 모델 내려받기 진행률 (첫 방문 1회, 이후 브라우저 캐시 — cached: 캐시 히트) */
+export type EmbedProgress = { pct: number; file: string; cached?: boolean };
 let progressCb: ((p: EmbedProgress) => void) | null = null;
 export function onEmbedProgress(cb: (p: EmbedProgress) => void) {
   progressCb = cb;
+}
+
+/** 모델 캐시 보유 여부만 확인한다(다운로드 없음) — 첫 화면에서 "캐시된 모델" 표시용 */
+export async function peekModelCache(): Promise<boolean> {
+  try {
+    const c = await caches.open(MODEL_CACHE);
+    return (await c.match(`${HF_ONNX}/model_no_gather_q4.onnx_data`)) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 // 모델 파일 캐시 — HF resolve URL은 요청마다 서명이 다른 CDN 주소로 리다이렉트되어
@@ -46,7 +56,7 @@ async function fetchWithProgress(url: string, file: string): Promise<Uint8Array>
     cache = await caches.open(MODEL_CACHE);
     const hit = await cache.match(url);
     if (hit) {
-      progressCb?.({ pct: 100, file });
+      progressCb?.({ pct: 100, file, cached: true });
       return new Uint8Array(await hit.arrayBuffer());
     }
   } catch {
@@ -77,21 +87,30 @@ async function fetchWithProgress(url: string, file: string): Promise<Uint8Array>
     out.set(c, offset);
     offset += c.length;
   }
-  if (cache) {
-    try {
-      await cache.put(url, new Response(out));
-    } catch {
-      /* 용량 초과 등으로 캐시 저장에 실패해도 이번 실행은 계속한다 */
-    }
-  }
+  if (cache) await putWithRetry(cache, url, out);
   return out;
 }
 
-/** 토크나이저 + ORT 세션 준비 (첫 호출 시 모델 다운로드, 이후 HTTP 캐시) */
+/** 캐시 저장 — Chrome이 간헐히 Unexpected internal error를 내는 경우가 있어 1회 재시도한다 */
+async function putWithRetry(cache: Cache, url: string, body: Uint8Array<ArrayBuffer>): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    try {
+      await cache.put(url, new Response(body));
+      return;
+    } catch (e) {
+      console.warn(`임베딩 모델 캐시 저장 실패 (${i + 1}/2) — ${url}:`, e);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+}
+
+/** 토크나이저 + ORT 세션 준비 (첫 호출 시 모델 다운로드, 이후 Cache Storage 재사용) */
 function ensureReady(): Promise<void> {
   if (session && tokenizer) return Promise.resolve();
   if (!ready) {
     ready = (async () => {
+      // 디스크 여유가 부족할 때 브라우저가 이 사이트의 저장소를 임의로 비우지 않게 한다
+      navigator.storage?.persist?.().catch(() => undefined);
       const ort = (await import(/* @vite-ignore */ ORT_URL)) as {
         InferenceSession: { create(
           buf: Uint8Array,
@@ -153,7 +172,7 @@ export async function loadCorpus(): Promise<DocChunk[]> {
 export interface Retrieved {
   chunk: DocChunk;
   score: number;
-  method: "vector" | "word";
+  method: "vector" | "bm25";
 }
 
 // 단어 검색용 불용어 — 조사·접속사·군더더기 표현 (2글자 이상만 걸러낸다)
@@ -173,18 +192,40 @@ function queryTerms(q: string): string[] {
     .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
 }
 
-/** 단어 기반 점수(0~1) — 검색어가 조각에 포함되는 비율.
- *  부분 문자열로 비교해 조사가 붙은 형태("모두콘의")도 "모두콘"에 맞게 한다. */
-function wordScore(question: string, text: string): number {
-  const terms = queryTerms(question);
-  if (!terms.length) return 0;
-  const low = text.toLowerCase();
-  let hit = 0;
-  for (const t of terms) if (low.includes(t)) hit++;
-  return hit / terms.length;
+// ── BM25 단어 검색 ────────────────────────────────────────────────────────
+//  tf(빈도)·IDF(희귀도)·문서 길이 정규화를 갖춘 표준 단어 검색 점수(k1=1.5, b=0.75).
+//  tf는 토큰 '포함' 관계로 세서 조사가 붙은 형태("모두콘의")도 "모두콘" 검색어에
+//  적중시킨다. 말뭉치가 37조각이라 질문마다 그 자리에서 계산한다(별도 색인 없음).
+const BM25_K1 = 1.5;
+const BM25_B = 0.75;
+
+/** BM25 원점수 — 문서별 점수(정규화 전). 점수 0 = 적중 없음 */
+function bm25(docs: DocChunk[], terms: string[]): { chunk: DocChunk; score: number }[] {
+  if (!terms.length) return [];
+  const toks = docs.map((d) => queryTerms(d.text)); // 문서 토큰화도 질문과 같은 규칙
+  const avgdl = toks.reduce((s, t) => s + t.length, 0) / docs.length;
+  const df = new Map<string, number>(); // 검색어 → 그 검색어를 포함하는 문서 수
+  for (const t of new Set(terms)) {
+    df.set(t, toks.reduce((n, dt) => n + (dt.some((x) => x.includes(t)) ? 1 : 0), 0));
+  }
+  return docs.map((chunk, i) => {
+    const dl = toks[i].length || 1;
+    let score = 0;
+    for (const [t, dfv] of df) {
+      if (!dfv) continue;
+      let tf = 0;
+      for (const x of toks[i]) if (x.includes(t)) tf++;
+      if (!tf) continue;
+      const idf = Math.log((docs.length - dfv + 0.5) / (dfv + 0.5) + 1);
+      score += (idf * tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + (BM25_B * dl) / avgdl));
+    }
+    return { chunk, score };
+  });
 }
 
-/** 하이브리드 검색 — 벡터 유사도 상위 10개 + 단어 일치 상위 5개(벡터 결과와 중복 제외) */
+/** 하이브리드 검색 — 벡터 유사도 상위 10개 + BM25 상위 5개(벡터 결과와 중복 제외).
+ *  BM25가 5개를 못 채우면 벡터 순위 11위부터 보충해 항상 k개를 돌려준다.
+ *  BM25 점수는 표시를 위해 이번 질문의 최상위가 1이 되게 정규화한다. */
 export async function retrieve(question: string, k = 15): Promise<Retrieved[]> {
   const [docs, q] = await Promise.all([loadCorpus(), embed(question)]);
   const vec = docs
@@ -197,12 +238,19 @@ export async function retrieve(question: string, k = 15): Promise<Retrieved[]> {
     .sort((a, b) => b.score - a.score);
   const topVec = vec.slice(0, Math.min(10, k));
   const picked = new Set(topVec.map((r) => r.chunk.id));
-  const lex = docs
-    .map((chunk) => ({ chunk, score: wordScore(question, chunk.text), method: "word" as const }))
+  const scored = bm25(docs, queryTerms(question))
     .filter((r) => r.score > 0 && !picked.has(r.chunk.id))
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.max(0, k - topVec.length));
-  return [...topVec, ...lex];
+  const top = scored[0]?.score ?? 0;
+  const lex = scored.map((r) => ({
+    chunk: r.chunk,
+    score: top > 0 ? r.score / top : 0,
+    method: "bm25" as const,
+  }));
+  for (const r of lex) picked.add(r.chunk.id);
+  const rest = vec.filter((r) => !picked.has(r.chunk.id)).slice(0, k - topVec.length - lex.length);
+  return [...topVec, ...lex, ...rest];
 }
 
 /** RAG 시스템 지시 — 근거 원칙을 고정 */

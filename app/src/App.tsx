@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { retrieve, buildPrompt, loadCorpus, onEmbedProgress, type Retrieved } from "./rag";
+import { retrieve, buildPrompt, loadCorpus, onEmbedProgress, peekModelCache, type Retrieved } from "./rag";
 import { chatStream, pingOllama, judgeWithOllama, type ChatMsg } from "./ollama";
 import { geminiStream, judgeTurn } from "./gemini";
 import type { JudgeResult } from "./judge";
@@ -22,7 +22,7 @@ type Phase = "idle" | "embed" | "search" | "stream" | "error-ollama";
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
   embed: "① 질문 임베딩 중 — 브라우저에서 질문을 벡터로 바꿉니다",
-  search: "② 근거 검색 중 — 벡터 유사도 상위 10개 + 단어 일치 상위 5개, 총 15개를 찾습니다",
+  search: "② 근거 검색 중 — 벡터 유사도 상위 10개 + BM25 상위 5개, 총 15개를 찾습니다",
   stream: "③ 답변 생성 중 — 찾은 근거를 붙여 모델이 답을 씁니다",
   "error-ollama": "연결 실패",
 };
@@ -45,13 +45,18 @@ export default function App() {
   const [dlPct, setDlPct] = useState<number | null>(null);
   const [judgeBusy, setJudgeBusy] = useState(false);
   const [openSrc, setOpenSrc] = useState<Record<number, boolean>>({});
+  const [embedCached, setEmbedCached] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     pingOllama().then(setOllamaOk);
     loadCorpus().catch(() => undefined); // 프리로드
-    onEmbedProgress(({ pct }) => setDlPct(pct >= 100 ? null : pct));
+    peekModelCache().then(setEmbedCached); // 재방문이면 "캐시된 모델" 표시
+    onEmbedProgress((p) => {
+      if (p.cached) setEmbedCached(true);
+      setDlPct(p.pct >= 100 ? null : p.pct);
+    });
   }, []);
 
   useEffect(() => {
@@ -176,6 +181,8 @@ export default function App() {
     console.log("feedback", { turn: i, value: v });
   }
 
+  const nBm = lastHits ? lastHits.filter((h) => h.method === "bm25").length : 0;
+
   return (
     <div className="app">
       <header className="hero">
@@ -277,7 +284,7 @@ export default function App() {
                   </span>
                 </div>
               )}
-              {t.sources && (
+              {t.sources && !(phase === "stream" && i === turns.length - 1) && (
                 <div className="chips">
                   <button
                     className="chips-toggle"
@@ -285,10 +292,13 @@ export default function App() {
                   >
                     출처 {t.sources.length}개 {openSrc[i] ? "접기 ▴" : "펼쳐 보기 ▾"}
                   </button>
+                  {t.sources[0].score < 0.55 && (
+                    <span className="weak-badge">⚠ 최고 유사도 {(t.sources[0].score * 100).toFixed(1)}%</span>
+                  )}
                   {openSrc[i] &&
                     t.sources.map((s) => (
                       <button key={s.chunk.id} className="chip" onClick={() => setShowSource(t.sources!)}>
-                        {s.chunk.id} · {s.chunk.section} · {s.method === "word" ? "단어" : "벡터"} {(s.score * 100).toFixed(0)}%
+                        {s.chunk.id} · {s.chunk.section} · {s.method === "bm25" ? "BM25" : "벡터"} {(s.score * 100).toFixed(0)}%
                       </button>
                     ))}
                 </div>
@@ -299,7 +309,9 @@ export default function App() {
             <div className="phase-box">
               <span className="spinner" />
               <span>
-                {PHASE_LABEL[phase]}
+                {phase === "embed" && embedCached
+                  ? "① 질문 임베딩 중 — 캐시된 모델 사용 (다운로드 없음)"
+                  : PHASE_LABEL[phase]}
                 {dlPct !== null && (
                   <div className="dl-progress">
                     임베딩 모델을 내려받는 중 {dlPct}% — 첫 방문 1회(약 200MB), 이후 브라우저에 캐시됩니다
@@ -308,10 +320,10 @@ export default function App() {
               </span>
             </div>
           )}
-          {lastHits && (phase === "stream" || phase === "idle") && (
+          {lastHits && phase === "stream" && (
             <div className="hits-box">
               <div className="hits-title">
-                ② 검색된 근거 (상위 {lastHits.length}개)
+                ② 검색된 근거 {lastHits.length}개 — 벡터 {lastHits.length - nBm} · BM25 {nBm}
                 {lastHits[0].score < 0.55 && (
                   <span className="weak-badge"> ⚠ 최고 유사도 {(lastHits[0].score * 100).toFixed(1)}% — 근거가 약합니다</span>
                 )}
@@ -320,7 +332,7 @@ export default function App() {
                 <div key={h.chunk.id} className="hit-row">
                   <span className="hit-id">{h.chunk.id}</span>
                   <span className="hit-sec">{h.chunk.section}</span>
-                  <span className="hit-score">{h.method === "word" ? "단어" : "벡터"} {(h.score * 100).toFixed(1)}%</span>
+                  <span className="hit-score">{h.method === "bm25" ? "BM25" : "벡터"} {(h.score * 100).toFixed(1)}%</span>
                   <span className="hit-text">{h.chunk.text.slice(0, 80)}…</span>
                 </div>
               ))}
@@ -356,7 +368,7 @@ export default function App() {
             {showSource.map((s) => (
               <div key={s.chunk.id} className="source-item">
                 <div className="source-meta">
-                  {s.chunk.id} · {s.chunk.section} · {s.method === "word" ? "단어 일치" : "벡터 유사도"} {(s.score * 100).toFixed(0)}%
+                  {s.chunk.id} · {s.chunk.section} · {s.method === "bm25" ? "BM25" : "벡터 유사도"} {(s.score * 100).toFixed(0)}%
                 </div>
                 <p>{s.chunk.text}</p>
                 <a href={s.chunk.url} target="_blank" rel="noreferrer">원문 보기 →</a>
