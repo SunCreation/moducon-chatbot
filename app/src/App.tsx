@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type CSSProperties } from "react";
 import { retrieve, buildPrompt, loadCorpus, onEmbedProgress, peekModelCache, type Retrieved } from "./rag";
 import { chatStream, pingOllama, judgeWithOllama, type ChatMsg } from "./ollama";
 import { geminiStream, judgeTurn } from "./gemini";
@@ -187,16 +187,28 @@ export default function App() {
     <div className="app">
       <header className="hero">
         <div className="hero-inner">
-          <p className="hero-badge">모두의연구소 컨퍼런스</p>
+          <p className="hero-badge">모두의연구소 · 국내 대표 커뮤니티 AI·테크 컨퍼런스</p>
           <h1>모두콘 <span className="accent">ModuCon</span></h1>
           <p className="hero-sub">
-            모두의연구소가 여는 연간 개발 컨퍼런스. 연구·개발·빅매치의 결과를 발표하고
+            모두의연구소가 2018년부터 여는 연간 컨퍼런스. 연구·개발·빅매치의 결과를 발표하고
             만나는 자리입니다. 궁금한 것은 아래 챗봇에게 — 로컬 모델이 공개 문서에서
             근거를 찾아 답합니다.
           </p>
           <a className="hero-cta" href="#chat">챗봇으로 물어보기 ↓</a>
         </div>
       </header>
+
+      <div className="marquee" aria-hidden="true">
+        <div className="marquee-track">
+          {[0, 1].map((g) => (
+            <div className="marquee-group" key={g}>
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <span key={i}>FROM AI TO INFINITY <i>∞</i></span>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
 
       <section className="engine">
         <div className="engine-row">
@@ -236,31 +248,42 @@ export default function App() {
       )}
 
       <section className="info">
-        <div className="card">
+        <div className="card card-a">
           <h2>모두콘이란?</h2>
           <p>
             모두콘은 모두의연구소가 매년 여는 컨퍼런스로, 함께 만들어가는 개발 문화를
             표방합니다. 자세한 내용은 챗봇에게 "모두콘이 뭐야?"라고 물어보세요.
           </p>
         </div>
-        <div className="card">
+        <div className="card card-b">
           <h2>근거 원칙</h2>
           <p>
             이 챗봇의 모든 답변은 공개 문서에서 뽑은 조각에 근거합니다. 자료에 없으면
             없다고 답합니다. 각 답변 아래 출처 칩을 누르면 원문 조각을 볼 수 있습니다.
           </p>
         </div>
-        <div className="card">
+        <div className="card card-c">
           <h2>실행 구조</h2>
           <p>
             브라우저가 직접 로컬 ollama 모델(qwen3.5:2b)을 호출하고, 질문 임베딩도
-            브라우저에서 실행합니다. 서버·API 키가 없습니다.
+            브라우저에서 실행합니다. Gemini API 키를 넣으면 Gemini이 답변을 만듭니다.
           </p>
         </div>
       </section>
 
       <section id="chat" className="chat">
-        <h2>모두콘 안내 챗봇</h2>
+        <h2>
+          모두콘 안내 챗봇
+          <span className={`conn ${ollamaOk === true ? "ok" : ollamaOk === false ? "bad" : ""}`}>
+            {engine === "gemini"
+              ? "Gemini API"
+              : ollamaOk === true
+                ? "ollama 연결됨"
+                : ollamaOk === false
+                  ? "ollama 미연결"
+                  : "연결 확인 중…"}
+          </span>
+        </h2>
         <div className="chat-log">
           {turns.map((t, i) => (
             <div key={i} className={`bubble ${t.role}`}>
@@ -297,7 +320,11 @@ export default function App() {
                   )}
                   {openSrc[i] &&
                     t.sources.map((s) => (
-                      <button key={s.chunk.id} className="chip" onClick={() => setShowSource(t.sources!)}>
+                      <button
+                        key={s.chunk.id}
+                        className={`chip ${s.method === "bm25" ? "bm25" : "vec"}`}
+                        onClick={() => setShowSource(t.sources!)}
+                      >
                         {s.chunk.id} · {s.chunk.section} · {s.method === "bm25" ? "BM25" : "벡터"} {(s.score * 100).toFixed(0)}%
                       </button>
                     ))}
@@ -329,10 +356,12 @@ export default function App() {
                 )}
               </div>
               {lastHits.map((h) => (
-                <div key={h.chunk.id} className="hit-row">
+                <div key={h.chunk.id} className={`hit-row ${h.method === "bm25" ? "bm25" : "vec"}`}>
                   <span className="hit-id">{h.chunk.id}</span>
                   <span className="hit-sec">{h.chunk.section}</span>
-                  <span className="hit-score">{h.method === "bm25" ? "BM25" : "벡터"} {(h.score * 100).toFixed(1)}%</span>
+                  <span className="hit-score" style={{ "--w": `${Math.round(h.score * 100)}%` } as CSSProperties}>
+                    {h.method === "bm25" ? "BM25" : "벡터"} {(h.score * 100).toFixed(1)}%
+                  </span>
                   <span className="hit-text">{h.chunk.text.slice(0, 80)}…</span>
                 </div>
               ))}
@@ -352,7 +381,7 @@ export default function App() {
             disabled={phase !== "idle"}
           />
           {phase === "stream" ? (
-            <button onClick={stop}>정지</button>
+            <button onClick={stop} className="stop-btn">정지</button>
           ) : (
             <button onClick={ask} disabled={phase !== "idle" || !input.trim()}>
               보내기
